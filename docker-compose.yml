@@ -18,7 +18,6 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./data/chromadb:/app/data/chromadb
-      - ./gcp_sa.json:/app/gcp_sa.json:ro
     env_file:
       - .env
     expose:

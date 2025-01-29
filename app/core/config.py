@@ -5,14 +5,13 @@ from typing import Dict, Optional
 from dotenv import load_dotenv
 
 def load_service_account() -> dict:
-    """Load service account from JSON file."""
+    """Load service account from environment variable."""
     try:
-        sa_path = Path("gcp_sa.json")
-        if not sa_path.exists():
-            raise FileNotFoundError("gcp_sa.json not found in project root")
+        sa_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+        if not sa_json:
+            raise ValueError("GCP_SERVICE_ACCOUNT_JSON environment variable not set")
         
-        with open(sa_path) as f:
-            sa_dict = json.load(f)
+        sa_dict = json.loads(sa_json)
             
         # Validate required fields
         required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
@@ -25,8 +24,11 @@ def load_service_account() -> dict:
             raise ValueError("JSON must be a service account key (type should be 'service_account')")
             
         return sa_dict
+    except json.JSONDecodeError as e:
+        print(f"Error parsing GCP_SERVICE_ACCOUNT_JSON: {str(e)}")
+        raise
     except Exception as e:
-        print(f"Error loading service account from gcp_sa.json: {str(e)}")
+        print(f"Error loading service account from environment: {str(e)}")
         raise
 
 class Settings:
