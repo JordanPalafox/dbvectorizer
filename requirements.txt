@@ -9,4 +9,5 @@ httpx
 pytest
 pytest-asyncio
 tenacity
-numpy 
+numpy
+psycopg2-binary 

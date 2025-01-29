@@ -55,26 +55,38 @@ class Settings:
         
         # ChromaDB Configuration
         self.CHROMA_PERSIST_DIRECTORY = os.getenv("CHROMA_PERSIST_DIRECTORY", "./data/chromadb")
-        self.CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "bigquery_metadata")
+        self.CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "database_metadata")
         
         # Google Cloud Configuration - These will be set after initialization
         self.GCP_PROJECT_ID: Optional[str] = None
         self.GCP_SERVICE_ACCOUNT_INFO: Optional[Dict] = None
+
+        # PostgreSQL Configuration
+        self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+        self.POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.POSTGRES_DB = os.getenv("POSTGRES_DB")
+        self.POSTGRES_USER = os.getenv("POSTGRES_USER")
+        self.POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+
+        # Validate PostgreSQL configuration if provided
+        if any([self.POSTGRES_DB, self.POSTGRES_USER, self.POSTGRES_PASSWORD]):
+            if not all([self.POSTGRES_DB, self.POSTGRES_USER, self.POSTGRES_PASSWORD]):
+                raise ValueError("All PostgreSQL credentials (DB, USER, PASSWORD) must be provided if any are set")
 
 # Initialize settings with better error handling
 try:
     # First create settings with environment variables
     settings = Settings()
     
-    # Then load and set service account info
-    service_account_info = load_service_account()
-    settings.GCP_SERVICE_ACCOUNT_INFO = service_account_info
-    settings.GCP_PROJECT_ID = service_account_info["project_id"]
+    # Then load and set service account info if GCP is configured
+    if os.getenv("GCP_SERVICE_ACCOUNT_JSON"):
+        service_account_info = load_service_account()
+        settings.GCP_SERVICE_ACCOUNT_INFO = service_account_info
+        settings.GCP_PROJECT_ID = service_account_info["project_id"]
     
 except Exception as e:
     print("Error loading settings:")
     print(f"1. Make sure .env file exists at: {os.path.abspath('.env')}")
-    print(f"2. Make sure gcp_sa.json exists at: {os.path.abspath('gcp_sa.json')}")
-    print("3. Check that all required environment variables are set")
+    print("2. Check that all required environment variables are set")
     print(f"\nError details: {str(e)}")
     raise 

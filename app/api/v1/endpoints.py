@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
-from app.models.bigquery import ExtractRequest, SearchRequest, SearchResponse, ColumnMetadata
+from app.models.bigquery import ExtractRequest as BigQueryExtractRequest, SearchRequest, SearchResponse, ColumnMetadata
+from app.models.postgres import ExtractRequest as PostgresExtractRequest
 from app.services.bigquery import BigQueryService
+from app.services.postgres import PostgresService
 from app.services.vector_store import VectorStoreService
 from app.core.config import settings
 
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 bigquery_service = BigQueryService()
+postgres_service = PostgresService()
 vector_store = VectorStoreService()
 
 # Store extraction status
@@ -21,10 +24,10 @@ extraction_status: Dict[str, Any] = {
     "last_success": None
 }
 
-async def extract_and_vectorize(project_id: str, force_refresh: bool = False):
-    """Background task to extract and vectorize metadata."""
+async def extract_and_vectorize_bigquery(project_id: str, force_refresh: bool = False):
+    """Background task to extract and vectorize metadata from BigQuery."""
     global extraction_status
-    logger.info(f"Starting metadata extraction for project: {project_id}")
+    logger.info(f"Starting metadata extraction for BigQuery project: {project_id}")
     
     try:
         extraction_status["is_running"] = True
@@ -46,21 +49,61 @@ async def extract_and_vectorize(project_id: str, force_refresh: bool = False):
         await vector_store.store_metadata(columns)
         
         extraction_status["last_success"] = {
+            "source": "bigquery",
             "project_id": project_id,
             "tables_count": len(tables_metadata),
             "columns_count": len(columns)
         }
-        logger.info("Metadata extraction and vectorization completed successfully")
+        logger.info("BigQuery metadata extraction and vectorization completed successfully")
         
     except Exception as e:
-        logger.error(f"Error during extraction: {str(e)}")
+        logger.error(f"Error during BigQuery extraction: {str(e)}")
         extraction_status["last_error"] = str(e)
         raise
     finally:
         extraction_status["is_running"] = False
 
-@router.post("/extract")
-async def extract_metadata(
+async def extract_and_vectorize_postgres(schema: str = "public", force_refresh: bool = False):
+    """Background task to extract and vectorize metadata from PostgreSQL."""
+    global extraction_status
+    logger.info(f"Starting metadata extraction for PostgreSQL schema: {schema}")
+    
+    try:
+        extraction_status["is_running"] = True
+        extraction_status["last_error"] = None
+        
+        # Extract metadata from PostgreSQL
+        logger.info("Extracting metadata from PostgreSQL...")
+        tables_metadata = await postgres_service.extract_metadata(schema)
+        columns = postgres_service.get_all_columns(tables_metadata)
+        logger.info(f"Found {len(tables_metadata)} tables with {len(columns)} total columns")
+        
+        # Reset collection if force refresh
+        if force_refresh:
+            logger.info("Force refresh requested, resetting collection...")
+            await vector_store.reset_collection()
+        
+        # Store in vector database
+        logger.info("Storing metadata in vector database...")
+        await vector_store.store_metadata(columns)
+        
+        extraction_status["last_success"] = {
+            "source": "postgres",
+            "schema": schema,
+            "tables_count": len(tables_metadata),
+            "columns_count": len(columns)
+        }
+        logger.info("PostgreSQL metadata extraction and vectorization completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Error during PostgreSQL extraction: {str(e)}")
+        extraction_status["last_error"] = str(e)
+        raise
+    finally:
+        extraction_status["is_running"] = False
+
+@router.post("/extract/bigquery")
+async def extract_bigquery_metadata(
     background_tasks: BackgroundTasks,
     project_id: str = Query(None, description="The GCP project ID to extract metadata from (defaults to service account project)"),
     force_refresh: bool = Query(False, description="Whether to reset the collection before extraction")
@@ -68,7 +111,7 @@ async def extract_metadata(
     """Trigger metadata extraction from BigQuery."""
     # Use project ID from service account if none provided
     actual_project_id = project_id or settings.GCP_PROJECT_ID
-    logger.info(f"Received extraction request for project: {actual_project_id}")
+    logger.info(f"Received BigQuery extraction request for project: {actual_project_id}")
     
     if extraction_status["is_running"]:
         logger.warning("Extraction already in progress")
@@ -77,18 +120,54 @@ async def extract_metadata(
             detail="Extraction already in progress"
         )
     
-    request = ExtractRequest(project_id=actual_project_id, force_refresh=force_refresh)
+    request = BigQueryExtractRequest(project_id=actual_project_id, force_refresh=force_refresh)
     background_tasks.add_task(
-        extract_and_vectorize,
+        extract_and_vectorize_bigquery,
         request.project_id,
         request.force_refresh
     )
     
-    logger.info("Extraction task queued")
+    logger.info("BigQuery extraction task queued")
     return {
-        "message": "Extraction started",
+        "message": "BigQuery extraction started",
         "status": "running",
         "project_id": actual_project_id
+    }
+
+@router.post("/extract/postgres")
+async def extract_postgres_metadata(
+    background_tasks: BackgroundTasks,
+    schema: str = Query("public", description="The PostgreSQL schema to extract metadata from"),
+    force_refresh: bool = Query(False, description="Whether to reset the collection before extraction")
+):
+    """Trigger metadata extraction from PostgreSQL."""
+    logger.info(f"Received PostgreSQL extraction request for schema: {schema}")
+    
+    if not all([settings.POSTGRES_DB, settings.POSTGRES_USER, settings.POSTGRES_PASSWORD]):
+        raise HTTPException(
+            status_code=400,
+            detail="PostgreSQL connection details not configured. Please set POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD environment variables."
+        )
+    
+    if extraction_status["is_running"]:
+        logger.warning("Extraction already in progress")
+        raise HTTPException(
+            status_code=409,
+            detail="Extraction already in progress"
+        )
+    
+    request = PostgresExtractRequest(schema=schema, force_refresh=force_refresh)
+    background_tasks.add_task(
+        extract_and_vectorize_postgres,
+        request.schema,
+        request.force_refresh
+    )
+    
+    logger.info("PostgreSQL extraction task queued")
+    return {
+        "message": "PostgreSQL extraction started",
+        "status": "running",
+        "schema": schema
     }
 
 @router.get("/status")
