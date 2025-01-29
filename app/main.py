@@ -6,7 +6,7 @@ from app.api.v1 import endpoints
 def create_application() -> FastAPI:
     application = FastAPI(
         title="DBVectorizer",
-        description="BigQuery Metadata Vectorization Service",
+        description="Database Metadata Vectorization Service",
         version="1.0.0",
         docs_url=f"{settings.API_PREFIX}/docs",
         redoc_url=f"{settings.API_PREFIX}/redoc",
