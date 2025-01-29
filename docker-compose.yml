@@ -1,17 +1,6 @@
 version: '3.8'
 
 services:
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - api
-    networks:
-      - dbvectorizer-network
-
   api:
     build:
       context: .
@@ -20,8 +9,8 @@ services:
       - ./data/chromadb:/app/data/chromadb
     env_file:
       - .env
-    expose:
-      - 8000
+    ports:
+      - "8000:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
