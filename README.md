@@ -11,94 +11,61 @@ DBVectorizer automatically extracts metadata from BigQuery tables, columns, and 
 - Python 3.9+
 - FastAPI - REST API framework
 - ChromaDB - Vector database
-- OpenAI API - For embeddings (text-embedding-3-large) and chat completions (gpt-4-0125-preview)
-- Google BigQuery API - For metadata extraction
-- Docker & Docker Compose - Containerization
+- OpenAI API - Para embeddings (text-embedding-3-large) y chat completions (gpt-4-0125-preview)
+- Google BigQuery API - Para extracción de metadatos
+- Docker & Docker Compose - Containerización
 - Nginx - Reverse proxy
-- Pydantic - Data validation and settings management
+- Pydantic - Validación de datos y gestión de configuraciones
+- Pytest - Testing framework
+- Tenacity - Manejo de reintentos y resiliencia
+- Httpx - Cliente HTTP asíncrono
+
+## Dependencias Principales
+
+```txt
+fastapi
+uvicorn
+python-dotenv
+chromadb
+openai
+google-cloud-bigquery
+python-multipart
+httpx
+pytest
+pytest-asyncio
+tenacity
+numpy
+```
 
 ## Current Project Status
 
-### Completed
-- ✅ Basic project structure
-- ✅ Environment configuration
-- ✅ FastAPI application setup
-- ✅ Docker configuration
+### Completado
+- ✅ Estructura básica del proyecto
+- ✅ Configuración del entorno
+- ✅ Configuración de FastAPI
+- ✅ Configuración de Docker
 - ✅ Nginx reverse proxy
-- ✅ Health check endpoint
-- ✅ Basic error handling
+- ✅ Endpoint de health check
+- ✅ Manejo básico de errores
+- ✅ Modelos de metadatos de BigQuery
+- ✅ Servicio de BigQuery para extracción de metadatos
+- ✅ Servicio de base de datos vectorial con ChromaDB
+- ✅ Pipeline de extracción de metadatos
+- ✅ Pipeline de vectorización
+- ✅ Funcionalidad de búsqueda
+- ✅ API REST completa con documentación
 
-### Next Implementation Steps
+### Próximas Mejoras
+1. Optimización de rendimiento
+   - Implementar caché para resultados frecuentes
+   - Mejorar la paginación de resultados
+   - Optimizar el proceso de extracción para grandes conjuntos de datos
 
-1. BigQuery Metadata Models (`app/models/bigquery.py`)
-```python
-class ColumnMetadata(BaseModel):
-    name: str
-    data_type: str
-    description: Optional[str]
-    table_name: str
-    dataset_name: str
-    project_id: str
-    is_nullable: bool
-    mode: str  # NULLABLE, REQUIRED, REPEATED
-
-class TableMetadata(BaseModel):
-    name: str
-    dataset_name: str
-    project_id: str
-    description: Optional[str]
-    columns: List[ColumnMetadata]
-    created_time: datetime
-    modified_time: datetime
-```
-
-2. BigQuery Service (`app/services/bigquery.py`)
-   - Initialize BigQuery client with service account
-   - List all datasets in project
-   - List all tables in each dataset
-   - Extract column metadata for each table
-   - Handle pagination and rate limits
-   - Cache results to avoid repeated API calls
-
-3. Vector Database Service (`app/services/vector_store.py`)
-   - Initialize ChromaDB client
-   - Create collection for metadata
-   - Generate embeddings using OpenAI
-   - Store column metadata with embeddings
-   - Implement search functionality
-
-4. Implementation Order:
-   a. Create metadata extraction pipeline:
-   ```python
-   async def extract_metadata(project_id: str):
-       # Initialize BigQuery client
-       # List all datasets
-       # For each dataset:
-           # List all tables
-           # For each table:
-               # Get table schema and metadata
-               # Extract column information
-               # Create ColumnMetadata objects
-       # Return complete metadata
-   ```
-   
-   b. Create vectorization pipeline:
-   ```python
-   async def vectorize_metadata(metadata: List[ColumnMetadata]):
-       # Initialize ChromaDB
-       # For each column:
-           # Generate embedding from column name
-           # Store metadata and embedding
-       # Return status
-   ```
-
-   c. Create search functionality:
-   ```python
-   async def search_metadata(query: str, top_k: int = 10):
-       # Generate query embedding
-       # Search ChromaDB
-       # Return top_k results with metadata
-   ```
+2. Mejoras de Funcionalidad
+   - Añadir más métricas y estadísticas
+   - Implementar búsqueda avanzada con filtros
+   - Añadir soporte para múltiples proyectos
+   - Implementar sistema de actualización incremental
 
 ## Prerequisites
 
@@ -109,51 +76,50 @@ class TableMetadata(BaseModel):
 
 ## Configuration
 
-The service requires a `.env` file with the following variables:
+El servicio requiere un archivo `.env` con las siguientes variables:
 
 ```env
-# OpenAI Configuration
+# Configuración de OpenAI
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_EMBEDDING_MODEL=text-embedding-3-large
 OPENAI_CHAT_MODEL=gpt-4-0125-preview
 
-# Google Cloud Configuration
+# Configuración de Google Cloud
 GCP_PROJECT_ID=your_project_id
-GCP_SERVICE_ACCOUNT={"type": "service_account", ...}  # Full JSON string of service account key
+GCP_SERVICE_ACCOUNT={"type": "service_account", ...}  # JSON completo de la cuenta de servicio
 
-# ChromaDB Configuration
+# Configuración de ChromaDB
 CHROMA_PERSIST_DIRECTORY=./data/chromadb
 CHROMA_COLLECTION_NAME=bigquery_metadata
 
-# API Configuration
+# Configuración de la API
 API_VERSION=v1
 API_PREFIX=/api/${API_VERSION}
 DEBUG=false
 
-# Server Configuration
+# Configuración del Servidor
 HOST=0.0.0.0
 PORT=8000
 ```
 
 ## API Endpoints
 
-### Currently Implemented
+### Endpoints Implementados
 - `GET /api/v1/health` - Health check endpoint
-
-### To Be Implemented
-- `POST /api/v1/extract` - Trigger metadata extraction from BigQuery
+- `POST /api/v1/extract` - Inicia la extracción de metadatos de BigQuery
   ```json
   {
-    "project_id": "your-project-id",
-    "force_refresh": false
+    "project_id": "your-project-id",  // Opcional, usa el proyecto por defecto si no se especifica
+    "force_refresh": false  // Opcional, reinicia la colección si es true
   }
   ```
-- `GET /api/v1/status` - Check extraction status
-- `POST /api/v1/search` - Search for similar columns
+- `GET /api/v1/status` - Verifica el estado de la extracción de metadatos
+- `GET /api/v1/embeddings/status` - Obtiene estadísticas de los embeddings en ChromaDB
+- `POST /api/v1/search` - Busca columnas similares
   ```json
   {
     "query": "customer email address",
-    "top_k": 10
+    "top_k": 10  // Opcional, por defecto 10, máximo 100
   }
   ```
 
@@ -198,4 +164,25 @@ docker-compose up --build
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Estructura del Proyecto
+
+```
+dbvectorizer/
+├── app/
+│   ├── models/
+│   ├── services/
+│   ├── api/
+│   └── core/
+├── data/
+│   └── chromadb/
+├── nginx/
+├── tests/
+├── .env
+├── .env.example
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── README.md
+``` 
