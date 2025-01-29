@@ -4,7 +4,8 @@ from openai import OpenAI
 from typing import List, Dict, Any
 import logging
 from app.core.config import settings
-from app.models.bigquery import ColumnMetadata
+from app.models.bigquery import ColumnMetadata as BigQueryColumnMetadata
+from app.models.postgres import ColumnMetadata as PostgresColumnMetadata
 import time
 
 # Set up logging
@@ -62,7 +63,16 @@ class VectorStoreService:
                 cleaned[key] = str(value)
         return cleaned
 
-    async def store_metadata(self, columns: List[ColumnMetadata]) -> None:
+    def _generate_column_id(self, column: Any) -> str:
+        """Generate a unique ID for a column based on its type."""
+        if isinstance(column, BigQueryColumnMetadata):
+            return f"bq.{column.project_id}.{column.dataset_name}.{column.table_name}.{column.name}"
+        elif isinstance(column, PostgresColumnMetadata):
+            return f"pg.{column.schema_name}.{column.table_name}.{column.name}"
+        else:
+            raise ValueError(f"Unsupported column type: {type(column)}")
+
+    async def store_metadata(self, columns: List[Any]) -> None:
         """Store column metadata in ChromaDB with embeddings."""
         logger.info(f"Storing metadata for {len(columns)} columns...")
         
@@ -73,11 +83,14 @@ class VectorStoreService:
             try:
                 # Prepare data for single column
                 text = column.get_embedding_text()
-                id = f"{column.project_id}.{column.dataset_name}.{column.table_name}.{column.name}"
+                id = self._generate_column_id(column)
                 
                 # Clean metadata
                 raw_metadata = column.to_dict()
                 metadata = self._clean_metadata(raw_metadata)
+                
+                # Add source type to metadata
+                metadata['source_type'] = 'bigquery' if isinstance(column, BigQueryColumnMetadata) else 'postgres'
                 
                 # Generate embedding with rate limiting
                 logger.info(f"Generating embedding for column: {id}")
@@ -99,12 +112,11 @@ class VectorStoreService:
             except Exception as e:
                 failed_count += 1
                 logger.error(f"Failed to process column {column.name}: {str(e)}")
-                logger.error(f"Metadata that caused error: {raw_metadata}")
                 continue
         
         logger.info(f"Embedding storage complete. Success: {successful_count}, Failed: {failed_count}")
 
-    async def search_metadata(self, query: str, top_k: int = 10) -> List[ColumnMetadata]:
+    async def search_metadata(self, query: str, top_k: int = 10) -> List[Any]:
         """Search for similar columns using the query."""
         logger.info(f"Searching for: {query} (top_k={top_k})")
         
@@ -119,10 +131,23 @@ class VectorStoreService:
             include=["metadatas", "distances"]
         )
         
-        # Convert results back to ColumnMetadata objects
+        # Convert results back to appropriate ColumnMetadata objects
         columns = []
         for metadata in results["metadatas"][0]:
-            columns.append(ColumnMetadata.from_dict(metadata))
+            # Remove source_type from metadata before creating objects
+            source_type = metadata.pop('source_type', 'postgres')  # default to postgres if not found
+            
+            # Remove any other fields that aren't part of the model
+            cleaned_metadata = {
+                k: v for k, v in metadata.items() 
+                if k in ['name', 'data_type', 'description', 'table_name', 'schema_name', 
+                        'is_nullable', 'mode', 'project_id', 'dataset_name']
+            }
+            
+            if source_type == 'bigquery':
+                columns.append(BigQueryColumnMetadata.from_dict(cleaned_metadata))
+            else:
+                columns.append(PostgresColumnMetadata.from_dict(cleaned_metadata))
         
         logger.info(f"Found {len(columns)} results")
         return columns

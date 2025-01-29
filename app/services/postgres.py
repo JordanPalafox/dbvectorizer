@@ -33,63 +33,115 @@ class PostgresService:
         try:
             with self._get_connection() as conn:
                 with conn.cursor(cursor_factory=DictCursor) as cur:
-                    # Get all tables in the schema
+                    # Primero verificamos si el esquema existe
+                    cur.execute("""
+                        SELECT EXISTS(
+                            SELECT 1 
+                            FROM information_schema.schemata 
+                            WHERE schema_name = %s
+                        )
+                    """, (schema,))
+                    
+                    schema_exists = cur.fetchone()[0]
+                    if not schema_exists:
+                        logger.warning(f"Schema {schema} does not exist")
+                        return []
+
+                    # Get all tables in the schema with their metadata
                     cur.execute("""
                         SELECT 
-                            table_name,
-                            obj_description((quote_ident(table_schema) || '.' || quote_ident(table_name))::regclass, 'pg_class') as table_description,
-                            pg_stat_all_tables.reltuples::bigint as row_count,
-                            pg_class.relcreated as created_time,
-                            pg_stat_all_tables.last_vacuum as modified_time
-                        FROM information_schema.tables
-                        JOIN pg_stat_all_tables ON tables.table_name = pg_stat_all_tables.relname
-                        JOIN pg_class ON pg_class.relname = tables.table_name
-                        WHERE table_schema = %s
-                        AND table_type = 'BASE TABLE'
+                            t.table_name,
+                            pg_catalog.pg_get_userbyid(pgc.relowner) as table_owner,
+                            pgc.reltuples::bigint as estimated_row_count,
+                            GREATEST(
+                                pg_stat_get_last_vacuum_time(pgc.oid),
+                                pg_stat_get_last_autovacuum_time(pgc.oid),
+                                pg_stat_get_last_analyze_time(pgc.oid),
+                                pg_stat_get_last_autoanalyze_time(pgc.oid)
+                            ) as last_modified
+                        FROM information_schema.tables t
+                        JOIN pg_catalog.pg_class pgc ON pgc.relname = t.table_name
+                        JOIN pg_catalog.pg_namespace pgn ON pgn.oid = pgc.relnamespace 
+                            AND pgn.nspname = t.table_schema
+                        WHERE t.table_schema = %s
+                        AND t.table_type = 'BASE TABLE'
+                        AND has_table_privilege(pgc.oid, 'SELECT')
                     """, (schema,))
                     
                     tables = cur.fetchall()
-                    logger.info(f"Found {len(tables)} tables in schema {schema}")
+                    logger.info(f"Found {len(tables)} accessible tables in schema {schema}")
 
                     for table in tables:
-                        # Get column information for each table
-                        cur.execute("""
-                            SELECT 
-                                column_name,
-                                data_type,
-                                is_nullable,
-                                col_description((table_schema || '.' || table_name)::regclass, ordinal_position) as column_description
-                            FROM information_schema.columns
-                            WHERE table_schema = %s
-                            AND table_name = %s
-                            ORDER BY ordinal_position
-                        """, (schema, table['table_name']))
-                        
-                        columns_data = cur.fetchall()
-                        columns = []
-                        
-                        for col in columns_data:
-                            column = ColumnMetadata(
-                                name=col['column_name'],
-                                data_type=col['data_type'],
-                                description=col['column_description'],
-                                table_name=table['table_name'],
+                        try:
+                            # Get table description safely
+                            cur.execute("""
+                                SELECT description 
+                                FROM pg_catalog.pg_description pd
+                                JOIN pg_catalog.pg_class pc ON pd.objoid = pc.oid
+                                JOIN pg_catalog.pg_namespace pn ON pc.relnamespace = pn.oid
+                                WHERE pc.relname = %s
+                                AND pn.nspname = %s
+                                AND pd.objsubid = 0
+                            """, (table['table_name'], schema))
+                            description_row = cur.fetchone()
+                            table_description = description_row['description'] if description_row else None
+
+                            # Get column information for each table
+                            cur.execute("""
+                                WITH column_descriptions AS (
+                                    SELECT 
+                                        pd.objsubid as ordinal_position,
+                                        pd.description
+                                    FROM pg_catalog.pg_description pd
+                                    JOIN pg_catalog.pg_class pc ON pd.objoid = pc.oid
+                                    JOIN pg_catalog.pg_namespace pn ON pc.relnamespace = pn.oid
+                                    WHERE pc.relname = %s
+                                    AND pn.nspname = %s
+                                    AND pd.objsubid > 0
+                                )
+                                SELECT 
+                                    c.column_name,
+                                    c.data_type,
+                                    c.is_nullable,
+                                    cd.description as column_description,
+                                    c.ordinal_position
+                                FROM information_schema.columns c
+                                LEFT JOIN column_descriptions cd 
+                                    ON cd.ordinal_position = c.ordinal_position::integer
+                                WHERE c.table_schema = %s
+                                AND c.table_name = %s
+                                ORDER BY c.ordinal_position
+                            """, (table['table_name'], schema, schema, table['table_name']))
+                            
+                            columns_data = cur.fetchall()
+                            columns = []
+                            
+                            for col in columns_data:
+                                column = ColumnMetadata(
+                                    name=col['column_name'],
+                                    data_type=col['data_type'],
+                                    description=col['column_description'],
+                                    table_name=table['table_name'],
+                                    schema_name=schema,
+                                    is_nullable=col['is_nullable'] == 'YES',
+                                    mode='NULLABLE' if col['is_nullable'] == 'YES' else 'REQUIRED'
+                                )
+                                columns.append(column)
+                            
+                            table_metadata = TableMetadata(
+                                name=table['table_name'],
                                 schema_name=schema,
-                                is_nullable=col['is_nullable'] == 'YES',
-                                mode='NULLABLE' if col['is_nullable'] == 'YES' else 'REQUIRED'
+                                description=table_description,
+                                columns=columns,
+                                created_time=datetime.now(),  # PostgreSQL no almacena la fecha de creación por defecto
+                                modified_time=table['last_modified'] if table['last_modified'] else datetime.now(),
+                                row_count=table['estimated_row_count']
                             )
-                            columns.append(column)
-                        
-                        table_metadata = TableMetadata(
-                            name=table['table_name'],
-                            schema_name=schema,
-                            description=table['table_description'],
-                            columns=columns,
-                            created_time=table['created_time'] if table['created_time'] else datetime.now(),
-                            modified_time=table['modified_time'] if table['modified_time'] else datetime.now(),
-                            row_count=table['row_count']
-                        )
-                        tables_metadata.append(table_metadata)
+                            tables_metadata.append(table_metadata)
+                            
+                        except Exception as table_error:
+                            logger.warning(f"Error processing table {table['table_name']}: {str(table_error)}")
+                            continue
                     
         except Exception as e:
             logger.error(f"Error extracting metadata: {str(e)}")
