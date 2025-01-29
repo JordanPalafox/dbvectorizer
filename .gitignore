@@ -52,3 +52,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db 
+
+#sa
+gcp_sa.json
