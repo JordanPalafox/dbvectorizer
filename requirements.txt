@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+chromadb
+openai
+google-cloud-bigquery
+python-multipart
+httpx
+pytest
+pytest-asyncio
+tenacity
+numpy 
